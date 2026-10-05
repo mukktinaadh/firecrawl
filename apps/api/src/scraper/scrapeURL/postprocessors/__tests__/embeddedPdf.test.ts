@@ -1,5 +1,14 @@
-import { embeddedPdfPostprocessor, extractEmbeddedPdfUrl } from "../embeddedPdf";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import {
+  embeddedPdfPostprocessor,
+  extractEmbeddedPdfUrl,
+} from "../embeddedPdf";
 import { isPdfUrl } from "../../../../lib/document-formats";
+import { scrapeURLWithEngine } from "../../engines";
+
+vi.mock("../../engines", () => ({
+  scrapeURLWithEngine: vi.fn(),
+}));
 
 describe("isPdfUrl", () => {
   it("returns true for direct PDF URLs", () => {
@@ -64,7 +73,7 @@ describe("extractEmbeddedPdfUrl", () => {
   });
 
   it("returns null for HTML without embedded PDFs", () => {
-    const html = '<div>No PDF here</div>';
+    const html = "<div>No PDF here</div>";
     const result = extractEmbeddedPdfUrl(html, baseUrl);
     expect(result).toBeNull();
   });
@@ -82,7 +91,8 @@ describe("extractEmbeddedPdfUrl", () => {
   });
 
   it("prefers first embedded PDF found", () => {
-    const html = '<iframe src="first.pdf"></iframe><object data="second.pdf"></object>';
+    const html =
+      '<iframe src="first.pdf"></iframe><object data="second.pdf"></object>';
     const result = extractEmbeddedPdfUrl(html, baseUrl);
     expect(result).toBe("https://example.com/first.pdf");
   });
@@ -151,7 +161,14 @@ describe("embeddedPdfPostprocessor.run", () => {
   } as any;
 
   it("returns original result when no embedded PDF found", async () => {
-    const meta = { ...baseMeta, logger: { info: vi.fn(), warn: vi.fn(), child: () => ({ info: vi.fn(), warn: vi.fn() }) } };
+    const meta = {
+      ...baseMeta,
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        child: () => ({ info: vi.fn(), warn: vi.fn() }),
+      },
+    };
     const engineResult = { ...baseEngineResult, html: "<div>No PDF</div>" };
 
     const result = await embeddedPdfPostprocessor.run(meta, engineResult);
@@ -159,7 +176,14 @@ describe("embeddedPdfPostprocessor.run", () => {
   });
 
   it("returns original result when no HTML", async () => {
-    const meta = { ...baseMeta, logger: { info: vi.fn(), warn: vi.fn(), child: () => ({ info: vi.fn(), warn: vi.fn() }) } };
+    const meta = {
+      ...baseMeta,
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        child: () => ({ info: vi.fn(), warn: vi.fn() }),
+      },
+    };
     const engineResult = { ...baseEngineResult, html: null };
 
     const result = await embeddedPdfPostprocessor.run(meta, engineResult);
@@ -167,7 +191,15 @@ describe("embeddedPdfPostprocessor.run", () => {
   });
 
   it("returns original result for lockdown", async () => {
-    const meta = { ...baseMeta, options: { lockdown: true }, logger: { info: vi.fn(), warn: vi.fn(), child: () => ({ info: vi.fn(), warn: vi.fn() }) } };
+    const meta = {
+      ...baseMeta,
+      options: { lockdown: true },
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        child: () => ({ info: vi.fn(), warn: vi.fn() }),
+      },
+    };
 
     const result = await embeddedPdfPostprocessor.run(meta, baseEngineResult);
     expect(result).toBe(baseEngineResult);
@@ -194,10 +226,16 @@ describe("embeddedPdfPostprocessor.run", () => {
     };
 
     const engineResult = { ...baseEngineResult };
+    vi.mocked(scrapeURLWithEngine).mockRejectedValue(
+      new Error("Engine failed"),
+    );
 
     // The postprocessor will try to call the PDF engine, which will fail
     // in this test environment. We just verify it doesn't crash and logs appropriately.
-    const result = await embeddedPdfPostprocessor.run({ ...meta, logger }, engineResult);
+    const result = await embeddedPdfPostprocessor.run(
+      { ...meta, logger },
+      engineResult,
+    );
 
     // Should return original result when PDF engine fails
     expect(result).toEqual(engineResult);

@@ -3,39 +3,41 @@ import type { Postprocessor } from ".";
 import type { EngineScrapeResult } from "../engines";
 import { scrapeURLWithEngine } from "../engines";
 import { isPdfUrl } from "../../../lib/document-formats";
+import * as cheerio from "cheerio";
 
-const EMBEDDED_PDF_SELECTORS = [
-  'iframe[src$=".pdf"]',
-  'object[data$=".pdf"]',
-  'embed[src$=".pdf"]',
-  'iframe[src*=".pdf"]',
-  'object[data*=".pdf"]',
-  'embed[src*=".pdf"]',
-];
+export function extractEmbeddedPdfUrl(
+  html: string,
+  baseUrl: string,
+): string | null {
+  try {
+    const $ = cheerio.load(html);
+    let embeddedPdfUrl: string | null = null;
 
-export function extractEmbeddedPdfUrl(html: string, baseUrl: string): string | null {
-  const lowerHtml = html.toLowerCase();
+    const elements = $("iframe, object, embed");
 
-  for (const selector of EMBEDDED_PDF_SELECTORS) {
-    const attr = selector.includes("iframe") ? "src" : selector.includes("object") ? "data" : "src";
-    const tag = selector.split("[")[0];
+    for (const element of elements) {
+      const $el = $(element);
+      const tagName = element.tagName.toLowerCase();
 
-    const regex = new RegExp(
-      `<${tag}[^>]*${attr}\\s*=\\s*["']([^"']*\\.pdf[^"']*)["']`,
-      "i",
-    );
+      const url = tagName === "object" ? $el.attr("data") : $el.attr("src");
 
-    const match = html.match(regex);
-    if (match?.[1]) {
-      try {
-        return new URL(match[1], baseUrl).href;
-      } catch {
-        continue;
+      if (url) {
+        try {
+          const absoluteUrl = new URL(url, baseUrl).href;
+
+          if (isPdfUrl(absoluteUrl)) {
+            embeddedPdfUrl = absoluteUrl;
+            break;
+          }
+        } catch {
+          continue;
+        }
       }
     }
+    return embeddedPdfUrl;
+  } catch (error) {
+    return null;
   }
-
-  return null;
 }
 
 export const embeddedPdfPostprocessor: Postprocessor = {
@@ -53,11 +55,6 @@ export const embeddedPdfPostprocessor: Postprocessor = {
     if (isPdfRequest) {
       return false;
     }
-
-    if (meta.options.lockdown) {
-      return false;
-    }
-
     return true;
   },
   run: async (meta: Meta, engineResult: EngineScrapeResult) => {
@@ -82,6 +79,24 @@ export const embeddedPdfPostprocessor: Postprocessor = {
     });
 
     try {
+      const originalUrlObj = new URL(baseUrl);
+      const pdfUrlObj = new URL(embeddedPdfUrl);
+      let safeHeaders = { ...(meta.options.headers || {}) };
+
+      if (originalUrlObj.origin !== pdfUrlObj.origin) {
+        const allowedHeaders = new Set([
+          "user-agent",
+          "accept",
+          "accept-language",
+          "accept-encoding",
+        ]);
+
+        safeHeaders = Object.fromEntries(
+          Object.entries(safeHeaders).filter(([key]) =>
+            allowedHeaders.has(key.toLowerCase()),
+          ),
+        );
+      }
       const pdfMeta = {
         ...meta,
         logger: meta.logger.child({ method: "embeddedPdfPostprocessor" }),
@@ -93,9 +108,11 @@ export const embeddedPdfPostprocessor: Postprocessor = {
 
       return {
         ...engineResult,
+        ...pdfResult,
+        url: engineResult.url,
+        statusCode: engineResult.statusCode,
         markdown: pdfResult.markdown ?? engineResult.markdown,
         html: pdfResult.html ?? engineResult.html,
-        pdfMetadata: pdfResult.pdfMetadata,
         contentType: "application/pdf",
         postprocessorsUsed: [
           ...(engineResult.postprocessorsUsed ?? []),
@@ -103,10 +120,13 @@ export const embeddedPdfPostprocessor: Postprocessor = {
         ],
       };
     } catch (error) {
-      meta.logger.warn("Failed to scrape embedded PDF, returning original result", {
-        embeddedPdfUrl,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      meta.logger.warn(
+        "Failed to scrape embedded PDF, returning original result",
+        {
+          embeddedPdfUrl,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      );
       return engineResult;
     }
   },
